@@ -1,0 +1,34 @@
+GITHUB'A KOD YÜKLEME (GÜNCELLEME) REHBERİ
+
+Projenizde yeni bir değişiklik veya geliştirme yaptıktan sonra, bu değişikliği GitHub'a (ve otomatik olarak Vercel üzerinden yayına) göndermek için yapmanız gerekenler sırasıyla aşağıdadır:
+
+1) Terminali Açın (Code Editörünüzde veya komut istemcisinde). Terminalin projenizin ana klasöründe (c:\tezgah\tezgah) olduğundan emin olun.
+
+2) Değişen Dosyaları Kaydetmek İçin Sıraya Alın:
+Aşağıdaki komutu yazarak "tüm değişen dosyaları" sisteme dahil edin:
+git add .
+
+(Not: Sadece belli bir dosyayı yüklemek istiyorsanız nokta (.) yerine o dosyanın yolunu yazabilirsiniz. "git add ." tüm listeyi yakaladığı için en risksiz ve kolay olanıdır.)
+
+3) Yaptığınız Değişikliklere Bir Not Düşün (Commit):
+Kodunuzu işlerken, daha sonra baktığınızda ne yaptığınızı hatırlamanız için açıklayıcı bir not ekleyerek kod paketini oluşturun:
+git commit -m "Buraya yaptığınız değişikliğin kısa bir özetini yazın"
+
+Örnek:
+git commit -m "Sepet sayfasının tasarımı yenilendi ve buton hatası düzeltildi"
+
+4) Paketlenen Kodu GitHub'a Gönderin (Push):
+Hazırladığınız kodları buluta (GitHub'a) yollamak için:
+git push
+
+------------------------------------------------------
+⚡ EN HIZLI VE TEK SATIRLIK KULLANIM BİÇİMİ:
+------------------------------------------------------
+Eğer kodunuzu sürekli güncelliyorsanız 3 kodu üst üste yazmak yerine tek bir defada (noktalı virgülle yan yana ekleyerek) terminale yapıştırabilirsiniz:
+
+git add . ; git commit -m "hata duzeltmeleri ve yeni tasarimlar yapildi" ; git push
+
+------------------------------------------------------
+SÜREÇ NASIL ÇALIŞIR?
+Bu "git push" komutu %100 ulaştığında kodlarınız Github'a ulaşmış olur.
+Vercel, Github deponuzu dinlediği için gelen yeni kodu otomatik olarak algılar. Herhangi bir butona basmanıza gerek kalmadan 1-2 dakika civarında projenizi yeniden derleyip gerçek internet sitenize canlıya alır! ✅

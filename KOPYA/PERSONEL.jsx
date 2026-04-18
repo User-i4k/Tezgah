@@ -24,10 +24,6 @@ export default function PersonelDashboard() {
     const [duzenlemeKaydediliyor, setDuzenlemeKaydediliyor] = useState(false);
     const [siliniyorId, setSiliniyorId] = useState(null);
 
-    // ── Menü & Stok State ──
-    const [menuAcik, setMenuAcik] = useState(false);
-    const [stokKartlari, setStokKartlari] = useState([]);
-
     useEffect(() => {
         const oturumKontrol = async () => {
             const { data } = await supabase.auth.getSession();
@@ -71,14 +67,7 @@ export default function PersonelDashboard() {
                     .order("created_at", { ascending: false });
                 setUrunler(uData || []);
             };
-            
-            const stokKartlariniGetir = async (sid) => {
-                const { data } = await supabase.from("stok_kartlari").select("*").eq("branch_id", sid).order("isim");
-                setStokKartlari(data || []);
-            };
-            
             await urunleriGetir(basvuruData.sube_id);
-            await stokKartlariniGetir(basvuruData.sube_id);
             setYukleniyor(false);
 
             const urunKanal = supabase
@@ -87,13 +76,7 @@ export default function PersonelDashboard() {
                     () => urunleriGetir(basvuruData.sube_id))
                 .subscribe();
 
-            const stokKanal = supabase
-                .channel(`sube-stoklar-${basvuruData.sube_id}`)
-                .on('postgres_changes', { event: '*', schema: 'public', table: 'stok_kartlari', filter: `branch_id=eq.${basvuruData.sube_id}` },
-                    () => stokKartlariniGetir(basvuruData.sube_id))
-                .subscribe();
-
-            return () => { supabase.removeChannel(urunKanal); supabase.removeChannel(stokKanal); };
+            return () => { supabase.removeChannel(urunKanal); };
         };
 
         const temizleyiciPrm = oturumKontrol();
@@ -107,7 +90,6 @@ export default function PersonelDashboard() {
             temizleyiciPrm.then(temizle => { if (typeof temizle === 'function') temizle(); });
         };
     }, []);
-
 
     useEffect(() => {
         if (!kullanici) return;
@@ -282,46 +264,12 @@ export default function PersonelDashboard() {
                 duzenlendi: true,
                 duzenlendi_at: new Date().toISOString(),
             }).eq("id", duzenlemeSiparisi.id).select();
-            
+
             if (guncellemeError) throw guncellemeError;
             if (!salesData || salesData.length === 0) throw new Error(`Satış tablosu güncellenemedi. "sales" tablosu için RLS "UPDATE" kuralınızı ekleyin.`);
 
-            // 5. STOKLARI EŞİTLE (Iade edip Güncel Halini Düşmek)
-            const eskiKalemler = duzenlemeSiparisi.sale_items || [];
-            const iptalVeDusumDegisimleri = {};
 
-            // Eski kalemleri stoklara İADE et (artı olarak ekle)
-            eskiKalemler.forEach(item => {
-                const iStok = stokKartlari.find(sk => sk.baglantili_menu_id === item.product_id);
-                if (iStok) {
-                    if(!iptalVeDusumDegisimleri[iStok.id]) iptalVeDusumDegisimleri[iStok.id] = 0;
-                    iptalVeDusumDegisimleri[iStok.id] += item.miktar;
-                }
-            });
-
-            // Yeni haliyle tekrar stoktan DÜŞ (eksi olarak yaz)
-            aktifKalemler.forEach(item => {
-                const iStok = stokKartlari.find(sk => sk.baglantili_menu_id === item.product_id);
-                if (iStok) {
-                    if(!iptalVeDusumDegisimleri[iStok.id]) iptalVeDusumDegisimleri[iStok.id] = 0;
-                    iptalVeDusumDegisimleri[iStok.id] -= item.miktar;
-                }
-            });
-
-            const stokPromisleri = [];
-            for (const [sId, netDegisim] of Object.entries(iptalVeDusumDegisimleri)) {
-                if (netDegisim !== 0) {
-                    stokPromisleri.push(supabase.rpc("stok_guncelle", { stok_id: parseInt(sId), miktar_degisimi: netDegisim }));
-                }
-            }
-            if (stokPromisleri.length > 0) {
-                await Promise.all(stokPromisleri);
-                // State Guncelle
-                const { data: gData } = await supabase.from("stok_kartlari").select("*").eq("branch_id", kullanici.sube_id).order("isim");
-                if (gData) setStokKartlari(gData);
-            }
-
-            // 6. Local state güncelle
+            // 5. Local state güncelle
             setGecmisSiparisler(prev => prev.map(s =>
                 s.id === duzenlemeSiparisi.id
                     ? { ...s, toplam_tutar: yeniToplam, duzenlendi: true, duzenlendi_at: new Date().toISOString(), sale_items: aktifKalemler }
@@ -344,31 +292,12 @@ export default function PersonelDashboard() {
         if (!onay) return;
         setSiliniyorId(siparisId);
         try {
-            // STOK İADESİ İÇİN ÜRÜNLERİ ÖĞRENELİM
-            const { data: iadeKalemleri } = await supabase.from("sale_items").select("*").eq("sale_id", siparisId);
-
             const { error: itemsError } = await supabase.from("sale_items").delete().eq("sale_id", siparisId);
             if (itemsError) throw itemsError;
-            
+
             const { data: sData, error: salesError } = await supabase.from("sales").delete().eq("id", siparisId).select();
             if (salesError) throw salesError;
             if (!sData || sData.length === 0) throw new Error(`Sipariş silinemedi. Supabase RLS "DELETE" işlemi onaylanmadı.`);
-
-            // SİLİNEN ÜRÜNLERİ STOĞA GERİ VER
-            if (iadeKalemleri && iadeKalemleri.length > 0) {
-                const stokGeriYuklemeler = iadeKalemleri.map(k => {
-                    const iStok = stokKartlari.find(sk => sk.baglantili_menu_id === k.product_id);
-                    if (iStok) {
-                        return supabase.rpc("stok_guncelle", { stok_id: iStok.id, miktar_degisimi: k.miktar }); // İade olduğu için artı (+) çalışır
-                    }
-                }).filter(Boolean);
-
-                if (stokGeriYuklemeler.length > 0) {
-                    await Promise.all(stokGeriYuklemeler);
-                    const { data: gData } = await supabase.from("stok_kartlari").select("*").eq("branch_id", kullanici.sube_id).order("isim");
-                    if (gData) setStokKartlari(gData);
-                }
-            }
 
             setGecmisSiparisler(prev => prev.filter(s => s.id !== siparisId));
             if (duzenlemeSiparisi?.id === siparisId) {
@@ -418,39 +347,9 @@ export default function PersonelDashboard() {
         }));
         const { error: kalemHata } = await supabase.from("sale_items").insert(kalemler);
         if (kalemHata) alert("Sipariş kalemleri kaydedilirken hata: " + kalemHata.message);
-        else { 
-            // Stok düşümü — sadece baglantili_menu_id olan kartlar için
-            const stokGuncellemeleriListesi = sepet
-                .map(item => ({ product_id: item.id, miktar: item.miktar }));
-
-            for (const item of stokGuncellemeleriListesi) {
-                const { data: stokKart } = await supabase
-                    .from("stok_kartlari")
-                    .select("id, mevcut_miktar")
-                    .eq("baglantili_menu_id", item.product_id)
-                    .eq("branch_id", kullanici.sube_id)
-                    .single();
-
-                if (stokKart) {
-                    const yeniMiktar = Math.max(0, parseFloat(stokKart.mevcut_miktar || 0) - item.miktar);
-                    await supabase
-                        .from("stok_kartlari")
-                        .update({ mevcut_miktar: yeniMiktar })
-                        .eq("id", stokKart.id);
-                }
-            }
-
-            // Verileri tazele
-            const { data: guncelStoklar } = await supabase.from("stok_kartlari").select("*").eq("branch_id", kullanici.sube_id).order("isim");
-            setStokKartlari(guncelStoklar || []);
-
-            setSepet([]); 
-            setAlinanNakit(""); 
-            setSepetAcik(false); 
-        }
+        else { setSepet([]); setAlinanNakit(""); setSepetAcik(false); }
         setSatisGonderiliyor(false);
     };
-
 
     const cikisYap = async () => {
         if (!window.confirm("Çıkış yapmak istediğinize emin misiniz?")) return;
@@ -504,54 +403,21 @@ export default function PersonelDashboard() {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <span className="text-white text-sm font-outfit font-black tabular-nums bg-white/10 px-3 py-1.5 rounded-xl">{saat || "..."}</span>
-                    <button onClick={() => setMenuAcik(true)} className="w-10 h-10 flex flex-col items-center justify-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 transition-all">
-                        <span className="w-4 h-0.5 bg-white rounded-full"></span>
-                        <span className="w-4 h-0.5 bg-white rounded-full"></span>
-                        <span className="w-4 h-0.5 bg-white rounded-full"></span>
+                    {/* Geçmiş Siparişler Butonu - Mobil */}
+                    <button
+                        onClick={gecmisAc}
+                        className="w-9 h-9 bg-white/10 hover:bg-white/20 rounded-xl flex items-center justify-center text-base transition-all relative"
+                        title="Geçmiş Siparişler"
+                    >
+                        📋
                     </button>
+                    <span className="text-white text-sm font-outfit font-black tabular-nums bg-white/10 px-3 py-1.5 rounded-xl">{saat || "..."}</span>
+                    <button onClick={() => setAyarlarAcik(true)} className="w-9 h-9 bg-white/10 hover:bg-white/20 rounded-xl flex items-center justify-center text-base transition-all">⚙️</button>
                 </div>
             </div>
 
-            {/* MOBİL: Hamburger Menü Drawer */}
-            {menuAcik && (
-                <div className="lg:hidden fixed inset-0 z-[100] flex">
-                    <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setMenuAcik(false)} />
-                    <div className="relative w-72 max-w-[85vw] bg-slate-950 h-full flex flex-col p-6 shadow-2xl border-r border-white/5">
-                        <div className="flex items-center justify-between mb-8">
-                            <div>
-                                <h1 className="text-white text-xl font-outfit font-black tracking-tighter leading-none">{isletmeBilgisi?.isletme_isim}</h1>
-                                <p className="text-indigo-300/70 text-[10px] font-medium mt-1 tracking-widest uppercase">{isletmeBilgisi?.sube_isim}</p>
-                            </div>
-                            <button onClick={() => setMenuAcik(false)} className="w-9 h-9 rounded-xl bg-white/10 hover:bg-white/20 text-white text-sm flex items-center justify-center">✕</button>
-                        </div>
-                        <nav className="flex flex-col gap-1.5 flex-1">
-                            <button onClick={() => { setMenuAcik(false); setSeciliKategori("HEPSİ"); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all text-left bg-indigo-500/20 border border-indigo-500/30">
-                                <span className="text-lg">🛒</span>
-                                <span className="font-outfit font-black text-sm uppercase tracking-widest text-indigo-300">Sipariş Al</span>
-                            </button>
-                            <button onClick={() => { setMenuAcik(false); gecmisAc(); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all text-left hover:bg-white/5 border border-transparent group">
-                                <span className="text-lg">📋</span>
-                                <span className="font-outfit font-black text-sm uppercase tracking-widest text-white/60 group-hover:text-white">Geçmiş Siparişler</span>
-                            </button>
-                            <button onClick={() => { setMenuAcik(false); setAyarlarAcik(true); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all text-left hover:bg-white/5 border border-transparent group">
-                                <span className="text-lg">⚙️</span>
-                                <span className="font-outfit font-black text-sm uppercase tracking-widest text-white/60 group-hover:text-white">Ayarlar</span>
-                            </button>
-                        </nav>
-                        <div className="pt-4 border-t border-white/5">
-                            <button onClick={cikisYap} className="w-full flex items-center justify-center gap-2 text-[10px] font-outfit font-black text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 px-4 py-3 rounded-xl transition-all uppercase tracking-widest">
-                                Çıkış Yap
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-
             {/* MOBİL: Kategori Barı */}
-            <div className="lg:hidden h-14 bg-slate-50 border-b border-slate-200 flex items-center px-4 gap-2 overflow-x-auto shrink-0 dark-scrollbar"
-                 onWheel={(e) => { if (e.currentTarget) e.currentTarget.scrollLeft += e.deltaY; }}>
+            <div className="lg:hidden h-14 bg-slate-50 border-b border-slate-200 flex items-center px-4 gap-2 overflow-x-auto no-scrollbar shrink-0">
                 {kategoriler.map((kat) => (
                     <button key={kat} onClick={() => setSeciliKategori(kat)}
                         className={`px-4 py-2 rounded-xl text-[11px] font-outfit font-black uppercase tracking-widest transition-all whitespace-nowrap shrink-0
@@ -692,7 +558,6 @@ export default function PersonelDashboard() {
                         <span className="text-[8px] font-black tracking-tighter text-center uppercase">GEÇMİŞ</span>
                     </button>
 
-
                     <button onClick={() => setAyarlarAcik(true)} className="flex flex-col items-center gap-1.5 text-slate-400 hover:text-white transition-all group">
                         <div className="w-12 h-12 rounded-xl flex items-center justify-center text-xl group-hover:bg-white/10 transition-all">⚙️</div>
                         <span className="text-[8px] font-black tracking-tighter text-center uppercase">AYAR</span>
@@ -720,8 +585,7 @@ export default function PersonelDashboard() {
                     </div>
                 </div>
 
-                <div className="h-20 bg-slate-50 border-b border-slate-200 flex items-center px-8 gap-3 overflow-x-auto shrink-0 dark-scrollbar"
-                     onWheel={(e) => { if (e.currentTarget) e.currentTarget.scrollLeft += e.deltaY; }}>
+                <div className="h-20 bg-slate-50 border-b border-slate-200 flex items-center px-8 gap-3 overflow-x-auto no-scrollbar shrink-0">
                     {kategoriler.map((kat) => (
                         <button key={kat} onClick={() => setSeciliKategori(kat)}
                             className={`px-8 py-3 rounded-2xl text-[11px] font-outfit font-black uppercase tracking-widest transition-all duration-300 whitespace-nowrap
@@ -1035,7 +899,7 @@ export default function PersonelDashboard() {
 
             {/* AYARLAR MODALI */}
             {ayarlarAcik && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl relative">
                         <button onClick={() => setAyarlarAcik(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800 text-xl font-bold">✕</button>
                         <h3 className="text-2xl font-bold text-gray-800 mb-6">⚙️ Ayarlar</h3>
@@ -1055,8 +919,6 @@ export default function PersonelDashboard() {
                     </div>
                 </div>
             )}
-
         </div>
     );
-
 }

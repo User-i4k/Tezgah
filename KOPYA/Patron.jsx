@@ -7,8 +7,6 @@ export default function PatronSubeDashboard() {
     const params = useParams();
     const subeAd = params.subeAd;
 
-
-
     const [yukleniyor, setYukleniyor] = useState(true);
     const [isletme, setIsletme] = useState(null);
     const [sube, setSube] = useState(null);
@@ -43,17 +41,6 @@ export default function PatronSubeDashboard() {
     const [duzenlenenKatAd, setDuzenlenenKatAd] = useState(null);
     const [duzenlenenKatGirdisi, setDuzenlenenKatGirdisi] = useState("");
     const [katIslemBekliyor, setKatIslemBekliyor] = useState(false);
-
-    // -- STOK STATE --
-    const [stokKartlari, setStokKartlari] = useState([]);
-    const [stokEkleModal, setStokEkleModal] = useState(false);
-    const [yeniStok, setYeniStok] = useState({ tip: 'menu', baglantili_menu_id: '', isim: '', birim: 'Adet', baslangic_miktari: '', minimum_miktar: '' });
-    const [ikmalModal, setIkmalModal] = useState(null); // hangi stok kartı için ikmal yapılıyor (stok objesi)
-    const [ikmalMiktar, setIkmalMiktar] = useState('');
-    const [ikmalNot, setIkmalNot] = useState('');
-    const [ikmalKaydediliyor, setIkmalKaydediliyor] = useState(false);
-    const [stokIkmalGecmis, setStokIkmalGecmis] = useState([]);
-    const [stokGorunum, setStokGorunum] = useState('envanter'); // 'envanter' | 'ikmal'
 
     const analizleriYukle = async (subeId, isletmeId) => {
         const simdi = new Date();
@@ -124,18 +111,6 @@ export default function PatronSubeDashboard() {
             setKategorilerListesi(prev => [...new Set([...prev, ...dbKats])].sort());
         }
 
-        const { data: stokData } = await supabase.from("stok_kartlari").select("*").eq("branch_id", subeId).order("isim");
-        setStokKartlari(stokData || []);
-
-        // İkmal geçmişini çek
-        const { data: ikmalData } = await supabase
-            .from("stok_ikmal")
-            .select("*")
-            .eq("branch_id", subeId)
-            .order("created_at", { ascending: false })
-            .limit(100);
-        setStokIkmalGecmis(ikmalData || []);
-
         const { data: personelListesi } = await supabase.from("users").select("auth_id, ad_soyad");
         const personelMap = {};
         (personelListesi || []).forEach(p => { personelMap[p.auth_id] = p.ad_soyad; });
@@ -174,7 +149,6 @@ export default function PatronSubeDashboard() {
             });
             setSubePersonelleri(birlesikPersonel);
         }
-
     };
 
     const siparisDetayYukle = async (siparis) => {
@@ -253,29 +227,7 @@ export default function PatronSubeDashboard() {
                     })
                 .subscribe();
 
-            // STOK VERİLERİNİ CANLI TAKİP ET
-            const stokKanal = supabase
-                .channel(`patron-stok-${subeData.id}`)
-                .on("postgres_changes", { event: "*", schema: "public", table: "stok_kartlari", filter: `branch_id=eq.${subeData.id}` },
-                    async () => {
-                        const { data } = await supabase.from("stok_kartlari").select("*").eq("branch_id", subeData.id).order("created_at", { ascending: false });
-                        if (data) setStokKartlari(data);
-                    })
-                .subscribe();
-
-            // SAYIMLARI CANLI TAKİP ET
-            const sayimKanal = supabase
-                .channel(`patron-sayim-${subeData.id}`)
-                .on("postgres_changes", { event: "*", schema: "public", table: "stok_sayimlari", filter: `branch_id=eq.${subeData.id}` },
-                    async () => {
-                        const { data } = await supabase.from("stok_sayimlari").select("*").eq("branch_id", subeData.id).order("created_at", { ascending: false });
-                        if (data) setStokSayimlari(data);
-                    })
-                .subscribe();
-
             window._aktifKanal = satisKanal;
-            window._stokKanal = stokKanal;
-            window._sayimKanal = sayimKanal;
         };
         paneliHazirla();
 
@@ -283,14 +235,6 @@ export default function PatronSubeDashboard() {
             if (window._aktifKanal) {
                 supabase.removeChannel(window._aktifKanal);
                 delete window._aktifKanal;
-            }
-            if (window._stokKanal) {
-                supabase.removeChannel(window._stokKanal);
-                delete window._stokKanal;
-            }
-            if (window._sayimKanal) {
-                supabase.removeChannel(window._sayimKanal);
-                delete window._sayimKanal;
             }
         };
     }, [subeAd]);
@@ -381,79 +325,6 @@ export default function PatronSubeDashboard() {
         }
     };
 
-    const yeniStokKaydet = async () => {
-        if (yeniStok.tip === 'manuel' && !yeniStok.isim.trim()) { alert("Lütfen ürün ismi girin"); return; }
-        if (yeniStok.tip === 'menu' && !yeniStok.baglantili_menu_id) { alert("Lütfen menüden ürün seçin"); return; }
-        if (!yeniStok.baslangic_miktari || isNaN(parseFloat(yeniStok.baslangic_miktari))) { alert("Lütfen şu an kaç tane olduğunu girin"); return; }
-
-        let isim = yeniStok.isim;
-        let birim = yeniStok.birim;
-        let p_id = null;
-
-        if (yeniStok.tip === 'menu') {
-            const secilenMenu = urunler.find(u => u.id.toString() === yeniStok.baglantili_menu_id.toString());
-            if (secilenMenu) {
-                isim = secilenMenu.isim;
-                birim = "Adet";
-                p_id = secilenMenu.id;
-            }
-        }
-
-        const { data, error } = await supabase.from("stok_kartlari").insert({
-            branch_id: sube.id,
-            isim: isim,
-            birim: birim,
-            baglantili_menu_id: p_id,
-            mevcut_miktar: parseFloat(yeniStok.baslangic_miktari),
-            minimum_miktar: parseFloat(yeniStok.minimum_miktar || 0),
-        }).select();
-
-        if (error) alert("Hata: " + error.message);
-        else {
-            if (data && data[0]) setStokKartlari(prev => [...prev, data[0]].sort((a, b) => a.isim.localeCompare(b.isim)));
-            setStokEkleModal(false);
-            setYeniStok({ tip: 'menu', baglantili_menu_id: '', isim: '', birim: 'Adet', baslangic_miktari: '', minimum_miktar: '' });
-        }
-    };
-
-    // Toptancıdan gelen ikmal: sadece gelen adet eklenir, tekrar saymaya gerek yok
-    const ikmalKaydet = async () => {
-        if (!ikmalMiktar || parseFloat(ikmalMiktar) <= 0) { alert("Kaç adet geldiğini girin"); return; }
-        setIkmalKaydediliyor(true);
-        const geldi = parseFloat(ikmalMiktar);
-        const yeniMiktar = parseFloat(ikmalModal.mevcut_miktar || 0) + geldi;
-
-        // 1. Stok kartını güncelle
-        const { error: stokErr } = await supabase.from("stok_kartlari")
-            .update({ mevcut_miktar: yeniMiktar })
-            .eq("id", ikmalModal.id);
-
-        if (stokErr) { alert("Hata: " + stokErr.message); setIkmalKaydediliyor(false); return; }
-
-        // 2. İkmal geçmişine kaydet
-        const { data: ikmalData } = await supabase.from("stok_ikmal").insert({
-            stok_kart_id: ikmalModal.id,
-            branch_id: sube.id,
-            miktar: geldi,
-            not_metni: ikmalNot || null,
-        }).select();
-
-        // 3. Local state güncelle
-        setStokKartlari(prev => prev.map(s => s.id === ikmalModal.id ? { ...s, mevcut_miktar: yeniMiktar } : s));
-        if (ikmalData) setStokIkmalGecmis(prev => [ikmalData[0], ...prev]);
-        setIkmalModal(null);
-        setIkmalMiktar('');
-        setIkmalNot('');
-        setIkmalKaydediliyor(false);
-    };
-
-    const stokKartiSil = async (id) => {
-        if (!window.confirm("Bu stok takibini silmek istediğinize emin misiniz? Sistemdeki verileri kalıcı silinir.")) return;
-        const { error } = await supabase.from("stok_kartlari").delete().eq("id", id);
-        if (error) alert("Hata: " + error.message);
-        else setStokKartlari(stokKartlari.filter(s => s.id !== id));
-    };
-
     const para = (sayi) => Number(sayi).toLocaleString("tr-TR", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     const tarihFormat = (iso) => new Date(iso).toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
@@ -469,7 +340,6 @@ export default function PatronSubeDashboard() {
     const sekmeListesi = [
         { id: "ozet", isim: "Dashboard", ikon: "📊" },
         { id: "menu", isim: "Ürünler", ikon: "🏷️" },
-        { id: "stok", isim: "Stok", ikon: "📦" },
         { id: "personel", isim: "Personeller", ikon: "👥" },
         { id: "gecmis", isim: "Siparişler", ikon: "📜" }
     ];
@@ -782,194 +652,6 @@ export default function PatronSubeDashboard() {
                     </div>
                 )}
 
-                {/* ══ STOK & DENETİM PANELİ (BİRLEŞTİRİLMİŞ) ══ */}
-                {aktifSekme === "stok" && (() => {
-                    // ── 1. HESAPLAMA MANTIKLARI (BİRLEŞTİRİLMİŞ) ──
-                    const simdi = new Date();
-                    const bugunBaslangic = new Date(simdi); bugunBaslangic.setHours(0, 0, 0, 0);
-                    const dunBaslangic = new Date(simdi); dunBaslangic.setDate(simdi.getDate() - 1); dunBaslangic.setHours(0, 0, 0, 0);
-                    const dunBitis = new Date(simdi); dunBitis.setHours(0, 0, 0, 0);
-                    const haftaBaslangic = new Date(simdi); haftaBaslangic.setDate(simdi.getDate() - 7);
-
-                    // A. Envanter Gruplama (Mevcut Durum)
-                    const kritikStoklar = stokKartlari.filter(s => {
-                        const min = parseFloat(s.minimum_miktar || 0);
-                        return min > 0 && parseFloat(s.mevcut_miktar || 0) <= min;
-                    });
-                    const dikkatStoklar = stokKartlari.filter(s => {
-                        const min = parseFloat(s.minimum_miktar || 0);
-                        const mevcut = parseFloat(s.mevcut_miktar || 0);
-                        return min > 0 && mevcut > min && mevcut <= min * 2;
-                    });
-                    const normalStoklar = stokKartlari.filter(s => {
-                        const min = parseFloat(s.minimum_miktar || 0);
-                        const mevcut = parseFloat(s.mevcut_miktar || 0);
-                        return min === 0 || mevcut > min * 2;
-                    });
-
-
-                    const StokKarti = ({ stok, oncelik }) => {
-                        const mevcut = parseFloat(stok.mevcut_miktar || 0);
-                        const min = parseFloat(stok.minimum_miktar || 0);
-                        const sonIkmal = stokIkmalGecmis.find(i => i.stok_kart_id === stok.id);
-                        const maxGosterge = Math.max(mevcut, min * 3, 10);
-                        const progress = Math.min(100, (mevcut / maxGosterge) * 100);
-
-                        const renkler = {
-                            kritik: { bg: "bg-red-50 border-red-200", bar: "bg-red-500", badge: "bg-red-100 text-red-700", icon: "🔴" },
-                            dikkat: { bg: "bg-amber-50 border-amber-200", bar: "bg-amber-400", badge: "bg-amber-100 text-amber-700", icon: "🟡" },
-                            normal: { bg: "bg-white border-slate-100", bar: "bg-emerald-500", badge: "bg-emerald-100 text-emerald-700", icon: "✅" },
-                        };
-                        const r = renkler[oncelik];
-
-                        return (
-                            <div className={`rounded-2xl border p-4 sm:p-5 transition-all ${r.bg}`}>
-                                <div className="flex items-start justify-between mb-3">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-lg">{r.icon}</span>
-                                        <div>
-                                            <h4 className="font-outfit font-black text-slate-900 text-base tracking-tight">{stok.isim}</h4>
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{stok.birim}</p>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => stokKartiSil(stok.id)} className="text-slate-300 hover:text-red-400 transition-colors text-sm">🗑️</button>
-                                </div>
-                                <div className="flex items-end justify-between mb-3">
-                                    <div>
-                                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Şu an rafta</p>
-                                        <p className={`font-outfit font-black text-3xl ${oncelik === 'kritik' ? 'text-red-600' : oncelik === 'dikkat' ? 'text-amber-600' : 'text-slate-900'}`}>
-                                            {mevcut} <span className="text-sm font-medium text-slate-500 ml-1">{stok.birim}</span>
-                                        </p>
-                                    </div>
-                                    {min > 0 && (
-                                        <div className="text-right">
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Uyarı</p>
-                                            <p className="text-sm font-outfit font-black text-slate-600">{min} {stok.birim}</p>
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="h-2 bg-slate-200 rounded-full mb-3 overflow-hidden">
-                                    <div className={`h-full rounded-full transition-all ${r.bar}`} style={{ width: `${progress}%` }}></div>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <p className="text-[9px] text-slate-400 font-medium truncate max-w-[120px]">
-                                        {sonIkmal ? `Son: ${new Date(sonIkmal.created_at).toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' })} • +${sonIkmal.miktar}` : "Henüz ikmal yok"}
-                                    </p>
-                                    <button onClick={() => { setIkmalModal(stok); setIkmalMiktar(''); setIkmalNot(''); }}
-                                        className="flex items-center gap-1 bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-outfit font-black px-3 py-1.5 rounded-xl transition-all uppercase tracking-widest">
-                                        + İkmal
-                                    </button>
-                                </div>
-                            </div>
-                        );
-                    };
-
-                    return (
-                        <div className="space-y-6">
-                            {/* ── UNIFIED HEADER ── */}
-                            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-5 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
-                                <div className="min-w-0">
-                                    <h3 className="font-outfit font-black text-slate-900 tracking-tight text-sm sm:text-base">Stok & Denetim Paneli</h3>
-                                    <p className="text-[10px] font-outfit font-black text-slate-400 uppercase tracking-widest mt-0.5">
-                                        {kritikStoklar.length > 0 ? `🔴 ${kritikStoklar.length} Ürün Kritik Seviyede!` : "✅ Tüm Stoklar Normal Seviyede"}
-                                    </p>
-                                </div>
-                                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-                                    <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-                                        {[
-                                            { id: 'envanter', label: '📦 Envanter' },
-                                            { id: 'ikmal', label: '🚚 İkmal Log' }
-                                        ].map(tab => (
-                                            <button key={tab.id} onClick={() => setStokGorunum(tab.id)}
-                                                className={`px-3 py-1.5 rounded-lg text-[10px] font-outfit font-black uppercase tracking-widest transition-all ${stokGorunum === tab.id ? 'bg-white shadow text-slate-900' : 'text-slate-500'}`}>
-                                                {tab.label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    <button onClick={() => setStokEkleModal(true)}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-[10px] font-outfit font-black uppercase tracking-widest transition-all shadow-md shadow-indigo-600/20 whitespace-nowrap">
-                                        + Yeni Takip Ekle
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* ── DYNAMIC CONTENT AREA ── */}
-                            {stokKartlari.length === 0 ? (
-                                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm text-center py-20">
-                                    <p className="text-5xl mb-4">📦</p>
-                                    <p className="font-outfit font-black text-slate-500 text-sm mb-1">Henüz Stok Takibi Başlatılmadı</p>
-                                    <p className="text-[10px] text-slate-400 font-medium px-8">Kritik ürünlerinizi takip etmek için &quot;Yeni Takip Ekle&quot; butonunu kullanın.</p>
-                                </div>
-                            ) : (
-                                <div className="space-y-6">
-                                    {/* 1. ENVANTER GÖRÜNÜMÜ */}
-                                    {stokGorunum === 'envanter' && (
-                                        <div className="space-y-6">
-                                            {kritikStoklar.length > 0 && (
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in slide-in-from-top-2 duration-500">
-                                                    {kritikStoklar.map(s => <StokKarti key={s.id} stok={s} oncelik="kritik" />)}
-                                                </div>
-                                            )}
-                                            {dikkatStoklar.length > 0 && (
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                    {dikkatStoklar.map(s => <StokKarti key={s.id} stok={s} oncelik="dikkat" />)}
-                                                </div>
-                                            )}
-                                            {normalStoklar.length > 0 && (
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                    {normalStoklar.map(s => <StokKarti key={s.id} stok={s} oncelik="normal" />)}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-
-                                    {/* 3. İKMAL GEÇMİŞİ GÖRÜNÜMÜ */}
-                                    {stokGorunum === 'ikmal' && (
-                                        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden animate-in fade-in duration-500">
-                                            <div className="px-5 sm:px-6 py-4 border-b border-gray-100">
-                                                <h4 className="font-outfit font-black text-slate-900 text-sm">İkmal Geçmişi</h4>
-                                                <p className="text-[10px] font-outfit font-black text-slate-400 uppercase tracking-widest mt-0.5">Teslim alınan ürünlerin dökümü</p>
-                                            </div>
-                                            {stokIkmalGecmis.length === 0 ? (
-                                                <div className="text-center py-16">
-                                                    <p className="text-3xl mb-3">🚚</p>
-                                                    <p className="text-[10px] font-outfit font-black text-slate-400 uppercase tracking-widest">Henüz kayıtlı ikmal bulunmuyor</p>
-                                                </div>
-                                            ) : (
-                                                <div className="divide-y divide-slate-50">
-                                                    {stokIkmalGecmis.map(ikmal => {
-                                                        const stokKart = stokKartlari.find(s => s.id === ikmal.stok_kart_id);
-                                                        return (
-                                                            <div key={ikmal.id} className="px-5 sm:px-6 py-4 flex items-center justify-between hover:bg-slate-50/80 transition-all">
-                                                                <div className="flex items-center gap-4">
-                                                                    <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-xl border border-emerald-100 shadow-sm">🚚</div>
-                                                                    <div>
-                                                                        <p className="font-outfit font-black text-slate-900 text-sm">{stokKart?.isim || "Silinmiş Ürün"}</p>
-                                                                        <p className="text-[10px] text-slate-400 font-medium">
-                                                                            {new Date(ikmal.created_at).toLocaleString('tr-TR', { day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit' })}
-                                                                            {ikmal.not_metni && <span className="text-slate-500 italic ml-2">• {ikmal.not_metni}</span>}
-                                                                        </p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="text-right">
-                                                                    <span className="font-outfit font-black text-xl text-emerald-600">+{ikmal.miktar}</span>
-                                                                    <p className="text-[8px] font-black uppercase text-slate-400 tracking-tighter">{stokKart?.birim || ""}</p>
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })()}
-
-
                 {/* ══ PERSONELLER ══ */}
                 {aktifSekme === "personel" && (
                     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -1082,59 +764,6 @@ export default function PatronSubeDashboard() {
                     </div>
                 )}
             </main>
-
-            {/* ── İKMAL MODALI ── */}
-            {ikmalModal && (
-                <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
-                    <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl border border-gray-100 flex flex-col">
-                        <div className="px-6 py-5 bg-slate-50 border-b border-gray-100 flex items-center justify-between shrink-0 rounded-t-3xl sm:rounded-t-2xl">
-                            <div>
-                                <h3 className="font-outfit font-black text-slate-900 tracking-tight text-sm sm:text-base">Teslim Alındı</h3>
-                                <p className="text-[10px] font-outfit font-black text-slate-400 uppercase tracking-widest mt-0.5">{ikmalModal.isim}</p>
-                            </div>
-                            <button onClick={() => setIkmalModal(null)} className="w-8 h-8 flex items-center justify-center bg-white hover:bg-slate-100 border border-slate-200 text-slate-500 rounded-xl text-sm">✕</button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">
-                                    Kaç {ikmalModal.birim} geldi?
-                                </label>
-                                <input
-                                    type="number" min="1" placeholder="0"
-                                    value={ikmalMiktar}
-                                    onChange={(e) => setIkmalMiktar(e.target.value)}
-                                    className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all placeholder:text-slate-300" />
-                                <p className="text-[10px] text-slate-400 font-medium mt-1.5">
-                                    Mevcut: <span className="font-black text-slate-700">{ikmalModal.mevcut_miktar} {ikmalModal.birim}</span>
-                                    {ikmalMiktar && !isNaN(parseFloat(ikmalMiktar)) && (
-                                        <span className="text-emerald-600 font-black ml-2">
-                                            → {parseFloat(ikmalModal.mevcut_miktar || 0) + parseFloat(ikmalMiktar)} {ikmalModal.birim}
-                                        </span>
-                                    )}
-                                </p>
-                            </div>
-                            <div>
-                                <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Not (isteğe bağlı)</label>
-                                <input
-                                    type="text" placeholder="Örn: Sabah siparişi, fatura no: 123"
-                                    value={ikmalNot}
-                                    onChange={(e) => setIkmalNot(e.target.value)}
-                                    className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all placeholder:text-slate-300" />
-                            </div>
-                        </div>
-                        <div className="px-6 py-5 border-t border-slate-100 flex gap-3 bg-white rounded-b-3xl sm:rounded-b-2xl">
-                            <button onClick={() => setIkmalModal(null)}
-                                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-outfit font-black py-4 rounded-xl text-[10px] uppercase tracking-widest transition-all">
-                                İptal
-                            </button>
-                            <button onClick={ikmalKaydet} disabled={ikmalKaydediliyor}
-                                className="flex-[2] bg-emerald-600 hover:bg-emerald-700 text-white font-outfit font-black py-4 rounded-xl text-[10px] uppercase tracking-widest shadow-xl transition-all border-b-4 border-emerald-800 active:border-b-0 active:translate-y-px disabled:opacity-50">
-                                {ikmalKaydediliyor ? "Kaydediliyor..." : "✓ Stoka Ekle"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* ── SİPARİŞ DETAY MODALİ ── */}
             {seciliSiparis && (
@@ -1259,92 +888,6 @@ export default function PatronSubeDashboard() {
                             <button onClick={() => { setKategoriModalAcik(false); setDuzenlenenKatAd(null); }}
                                 className="w-full bg-slate-900 hover:bg-slate-950 text-white py-3.5 rounded-xl text-xs font-outfit font-black uppercase tracking-widest">
                                 Tamamla
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {/* ── STOK EKLE MODALI ── */}
-            {stokEkleModal && (
-                <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
-                    <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl shadow-2xl border border-gray-100 flex flex-col">
-                        <div className="px-6 py-5 bg-slate-50 border-b border-gray-100 flex items-center justify-between shrink-0 rounded-t-3xl sm:rounded-t-2xl">
-                            <h3 className="font-outfit font-black text-slate-900 tracking-tight text-sm sm:text-base">Yeni Stok Takibi Ekle</h3>
-                            <button onClick={() => setStokEkleModal(false)} className="w-8 h-8 flex items-center justify-center bg-white hover:bg-slate-100 border border-slate-200 text-slate-500 rounded-xl text-sm">✕</button>
-                        </div>
-                        <div className="p-6">
-                            <div className="flex bg-slate-100 p-1 rounded-xl mb-5">
-                                <button onClick={() => setYeniStok({ ...yeniStok, tip: 'menu' })} className={`flex-1 py-2 text-[10px] font-outfit font-black uppercase tracking-widest rounded-lg transition-all ${yeniStok.tip === 'menu' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-800'}`}>Menüdeki Ürün</button>
-                                <button onClick={() => setYeniStok({ ...yeniStok, tip: 'manuel' })} className={`flex-1 py-2 text-[10px] font-outfit font-black uppercase tracking-widest rounded-lg transition-all ${yeniStok.tip === 'manuel' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-800'}`}>Manuel Ekle</button>
-                            </div>
-
-                            {yeniStok.tip === 'menu' ? (
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Satıştaki Ürün (Adet Olarak Takip Edilir)</label>
-                                        <select value={yeniStok.baglantili_menu_id} onChange={(e) => setYeniStok({ ...yeniStok, baglantili_menu_id: e.target.value })}
-                                            className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-bold text-slate-900 outline-none transition-all">
-                                            <option value="">-- Ürün Seçin --</option>
-                                            {urunler.map(u => (
-                                                <option key={u.id} value={u.id}>{u.isim} ({para(u.fiyat)} ₺)</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Başlangıç Miktarı</label>
-                                            <input type="number" step="any" value={yeniStok.baslangic_miktari || ''} onChange={(e) => setYeniStok({ ...yeniStok, baslangic_miktari: e.target.value })}
-                                                className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all" />
-                                        </div>
-                                        <div>
-                                            <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Minimum Miktar</label>
-                                            <input type="number" step="any" value={yeniStok.minimum_miktar || ''} onChange={(e) => setYeniStok({ ...yeniStok, minimum_miktar: e.target.value })}
-                                                className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all" />
-                                        </div>
-                                    </div>
-                                    <p className="text-[10px] text-slate-500 px-1">Bu seçenek Kutu Kola, Su, Soda, Tatlı Dilimi gibi <span className="font-bold text-slate-900">satıldığı an stoktan 1 adet düşmesi gereken</span> ürünler içindir.</p>
-                                </div>
-                            ) : (
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Malzeme Adı</label>
-                                        <input type="text" placeholder="Örn: Espresso Çekirdeği, Kıyma" value={yeniStok.isim} onChange={(e) => setYeniStok({ ...yeniStok, isim: e.target.value })}
-                                            className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all placeholder:text-slate-300" />
-                                    </div>
-                                    <div>
-                                        <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Birimi</label>
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {["Adet", "Kg", "Litre"].map(br => (
-                                                <button key={br} onClick={() => setYeniStok({ ...yeniStok, birim: br })}
-                                                    className={`py-3 rounded-xl border-2 text-xs font-outfit font-black tracking-wider uppercase transition-all ${yeniStok.birim === br ? 'bg-indigo-50 border-indigo-500 text-indigo-700' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}>
-                                                    {br}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Başlangıç Miktarı</label>
-                                            <input type="number" step="any" value={yeniStok.baslangic_miktari || ''} onChange={(e) => setYeniStok({ ...yeniStok, baslangic_miktari: e.target.value })}
-                                                className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all" />
-                                        </div>
-                                        <div>
-                                            <label className="text-[9px] font-outfit font-black text-slate-500 uppercase tracking-[0.2em] block mb-1.5">Minimum Miktar</label>
-                                            <input type="number" step="any" value={yeniStok.minimum_miktar || ''} onChange={(e) => setYeniStok({ ...yeniStok, minimum_miktar: e.target.value })}
-                                                className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-sm font-outfit font-black text-slate-900 outline-none transition-all" />
-                                        </div>
-                                    </div>
-                                    <p className="text-[10px] text-slate-500 px-1">Bu seçenek menüde doğrudan satılmayan, ancak personelin gün sonunda harcama yazdığı veya deponuzda takip ettiğiniz ham maddeler içindir.</p>
-                                </div>
-                            )}
-
-                        </div>
-                        <div className="px-6 py-5 border-t border-slate-100 flex gap-3 bg-white rounded-b-3xl sm:rounded-b-2xl">
-                            <button onClick={() => setStokEkleModal(false)}
-                                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-outfit font-black py-4 rounded-xl text-[10px] uppercase tracking-widest transition-all">İptal</button>
-                            <button onClick={yeniStokKaydet}
-                                className="flex-[2] bg-indigo-600 hover:bg-indigo-700 text-white font-outfit font-black py-4 rounded-xl text-[10px] uppercase tracking-widest shadow-xl transition-all border-b-4 border-indigo-800 active:border-b-0 active:translate-y-px">
-                                Takibi Başlat
                             </button>
                         </div>
                     </div>
